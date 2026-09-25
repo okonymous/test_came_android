@@ -1,6 +1,8 @@
 name: Build Astra APK
 
 on:
+  push:
+    branches: [ "astra-build" ]
   workflow_dispatch:
 
 permissions:
