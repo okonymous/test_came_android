@@ -20,7 +20,12 @@ data class AssistantPlan(
             val type = actionObject.optString("type", "none")
             val paramsObject = actionObject.optJSONObject("params") ?: JSONObject()
             val params = mutableMapOf<String, String>()
-            paramsObject.keys().forEach { key -> params[key] = paramsObject.optString(key) }
+            paramsObject.keys().forEach { key ->
+                if (!paramsObject.isNull(key)) {
+                    val value = paramsObject.optString(key, "").trim()
+                    if (value.isNotBlank()) params[key] = value
+                }
+            }
             return AssistantPlan(spoken, AssistantAction(type, params))
         }
     }
