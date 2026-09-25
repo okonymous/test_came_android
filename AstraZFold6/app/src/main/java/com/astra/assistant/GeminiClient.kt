@@ -1,6 +1,7 @@
 package com.astra.assistant
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -24,6 +25,47 @@ class GeminiClient {
         userText: String,
         memory: List<MemoryTurn>
     ): AssistantPlan = withContext(Dispatchers.IO) {
+        val preferred = model.trim().ifBlank { "gemini-3.5-flash-lite" }
+        val fallbackModels = listOf(
+            preferred,
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.8-flash"
+        ).distinct()
+
+        var lastError: IOException? = null
+
+        for ((index, candidate) in fallbackModels.withIndex()) {
+            try {
+                return@withContext requestPlan(
+                    apiKey = apiKey,
+                    model = candidate,
+                    assistantName = assistantName,
+                    userText = userText,
+                    memory = memory
+                )
+            } catch (e: GeminiHttpException) {
+                lastError = e
+                val retryable = e.code == 429 || e.code == 503 || e.code == 404
+                if (!retryable || index == fallbackModels.lastIndex) throw e
+                delay(450L + (index * 500L))
+            } catch (e: IOException) {
+                lastError = e
+                if (index == fallbackModels.lastIndex) throw e
+                delay(350L)
+            }
+        }
+
+        throw lastError ?: IOException("Tidak ada model Gemini yang tersedia.")
+    }
+
+    private fun requestPlan(
+        apiKey: String,
+        model: String,
+        assistantName: String,
+        userText: String,
+        memory: List<MemoryTurn>
+    ): AssistantPlan {
         val recent = memory.takeLast(12).joinToString("\n") { it.role + ": " + it.text }
 
         val instructions = """
@@ -107,12 +149,11 @@ class GeminiClient {
             .put("generationConfig", JSONObject()
                 .put("responseMimeType", "application/json")
                 .put("responseJsonSchema", schema)
-                .put("temperature", 0.4)
+                .put("temperature", 0.35)
                 .put("maxOutputTokens", 1200))
 
-        val safeModel = model.trim().ifBlank { "gemini-3.8-flash" }
         val request = Request.Builder()
-            .url("https://generativelanguage.googleapis.com/v1beta/models/" + safeModel + ":generateContent")
+            .url("https://generativelanguage.googleapis.com/v1beta/models/" + model + ":generateContent")
             .addHeader("x-goog-api-key", apiKey.trim())
             .addHeader("Content-Type", "application/json")
             .post(body.toString().toRequestBody("application/json".toMediaType()))
@@ -121,9 +162,12 @@ class GeminiClient {
         http.newCall(request).execute().use { response ->
             val raw = response.body?.string().orEmpty()
             if (!response.isSuccessful) {
-                throw IOException("Gemini " + response.code + ": " + friendlyError(raw))
+                throw GeminiHttpException(
+                    code = response.code,
+                    message = "Gemini " + response.code + " [" + model + "]: " + friendlyError(raw)
+                )
             }
-            AssistantPlan.fromJson(extractText(raw))
+            return AssistantPlan.fromJson(extractText(raw))
         }
     }
 
@@ -156,3 +200,8 @@ class GeminiClient {
         error?.optString("message")?.takeIf { it.isNotBlank() } ?: raw.take(400)
     }.getOrDefault(raw.take(400))
 }
+
+class GeminiHttpException(
+    val code: Int,
+    message: String
+) : IOException(message)
