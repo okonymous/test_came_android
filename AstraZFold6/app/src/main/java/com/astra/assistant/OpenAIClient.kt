@@ -46,6 +46,7 @@ class OpenAIClient {
             open_url -> url
             open_app -> name
 
+            In action.params, set unused parameters to null.
             If required information is missing, ask for it and return action type none.
             Never invent phone numbers or email addresses.
         """.trimIndent()
@@ -60,16 +61,34 @@ class OpenAIClient {
             append(userText)
         }
 
+        fun nullableString(): JSONObject = JSONObject()
+            .put("type", JSONArray().put("string").put("null"))
+
+        val paramNames = listOf(
+            "number", "message", "to", "subject", "body",
+            "hour", "minute", "label", "query", "url", "name"
+        )
+
+        val paramProperties = JSONObject()
+        paramNames.forEach { key -> paramProperties.put(key, nullableString()) }
+
         val paramsSchema = JSONObject()
             .put("type", "object")
-            .put("additionalProperties", JSONObject().put("type", "string"))
+            .put("properties", paramProperties)
+            .put("required", JSONArray(paramNames))
+            .put("additionalProperties", false)
 
         val actionSchema = JSONObject()
             .put("type", "object")
             .put("properties", JSONObject()
-                .put("type", JSONObject().put("type", "string"))
+                .put("type", JSONObject()
+                    .put("type", "string")
+                    .put("enum", JSONArray(listOf(
+                        "none", "whatsapp", "email", "dial", "sms",
+                        "alarm", "maps", "open_url", "open_app"
+                    ))))
                 .put("params", paramsSchema))
-            .put("required", JSONArray().put("type").put("params"))
+            .put("required", JSONArray(listOf("type", "params")))
             .put("additionalProperties", false)
 
         val schema = JSONObject()
@@ -77,7 +96,7 @@ class OpenAIClient {
             .put("properties", JSONObject()
                 .put("spoken", JSONObject().put("type", "string"))
                 .put("action", actionSchema))
-            .put("required", JSONArray().put("spoken").put("action"))
+            .put("required", JSONArray(listOf("spoken", "action")))
             .put("additionalProperties", false)
 
         val body = JSONObject()
