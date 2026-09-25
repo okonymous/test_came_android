@@ -102,10 +102,10 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     @Composable
     private fun AstraApp() {
         val prefs = remember { SecurePrefs(this) }
-        val client = remember { OpenAIClient() }
+        val client = remember { GeminiClient() }
         val scope = rememberCoroutineScope()
 
-        var apiKey by remember { mutableStateOf(prefs.apiKey) }
+        var apiKey by remember { mutableStateOf(prefs.geminiApiKey) }
         var model by remember { mutableStateOf(prefs.model) }
         var assistantName by remember { mutableStateOf(prefs.assistantName) }
         var input by remember { mutableStateOf("") }
@@ -307,7 +307,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                 onModel = { model = it },
                 onName = { assistantName = it },
                 onSave = {
-                    prefs.apiKey = apiKey
+                    prefs.geminiApiKey = apiKey
                     prefs.model = model
                     prefs.assistantName = assistantName
                     assistantName = prefs.assistantName
@@ -391,7 +391,7 @@ private fun StatusPane(
                     Spacer(Modifier.height(5.dp))
                     Text(text = model, color = AstraMuted, fontSize = 12.sp)
                     Text(
-                        text = "Z FOLD MODE • ENCRYPTED LOCAL MEMORY",
+                        text = "GEMINI API • Z FOLD MODE • ENCRYPTED LOCAL MEMORY",
                         color = AstraMuted,
                         fontSize = 9.sp,
                         letterSpacing = 0.8.sp
@@ -633,7 +633,7 @@ private fun SettingsDialog(
                 OutlinedTextField(
                     value = apiKey,
                     onValueChange = onApiKey,
-                    label = { Text("OpenAI API Key") },
+                    label = { Text("Gemini API Key") },
                     singleLine = true,
                     visualTransformation = PasswordVisualTransformation()
                 )
@@ -644,7 +644,7 @@ private fun SettingsDialog(
                     singleLine = true
                 )
                 Text(
-                    text = "Default: gpt-5.6-sol. API key disimpan terenkripsi di perangkat.",
+                    text = "Default: gemini-3.8-flash • Gemini free tier. API key disimpan terenkripsi di perangkat.",
                     style = MaterialTheme.typography.bodySmall
                 )
                 TextButton(onClick = onClearMemory) {
