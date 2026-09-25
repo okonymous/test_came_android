@@ -1,8 +1,6 @@
 name: Build Astra APK
 
 on:
-  push:
-    branches: [ "astra-build" ]
   workflow_dispatch:
 
 permissions:
@@ -20,7 +18,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -38,19 +36,16 @@ jobs:
         with:
           gradle-version: "8.9"
 
-      - name: Extract Astra source
-        run: unzip -o AstraZFold6_v0.2_source.zip
-
       - name: Build debug APK
         working-directory: AstraZFold6
         run: gradle --no-daemon assembleDebug
 
       - name: Rename APK
-        run: cp AstraZFold6/app/build/outputs/apk/debug/app-debug.apk Astra-ZFold6-v0.2.apk
+        run: cp AstraZFold6/app/build/outputs/apk/debug/app-debug.apk Astra-ZFold6-v0.3.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Astra-ZFold6-v0.2
-          path: Astra-ZFold6-v0.2.apk
+          name: Astra-ZFold6-v0.3
+          path: Astra-ZFold6-v0.3.apk
           if-no-files-found: error
