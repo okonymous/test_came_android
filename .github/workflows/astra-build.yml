@@ -43,11 +43,11 @@ jobs:
         run: gradle --no-daemon assembleDebug
 
       - name: Rename APK
-        run: cp AstraZFold6/app/build/outputs/apk/debug/app-debug.apk Astra-ZFold6-v0.3.1.1.apk
+        run: cp AstraZFold6/app/build/outputs/apk/debug/app-debug.apk Astra-ZFold6-v0.3.1.apk
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Astra-ZFold6-v0.3.1
-          path: Astra-ZFold6-v0.3.1.1.apk
+          path: Astra-ZFold6-v0.3.1.apk
           if-no-files-found: error
