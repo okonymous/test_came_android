@@ -21,13 +21,13 @@ class SecurePrefs(context: Context) {
         EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
     )
 
-    var apiKey: String
-        get() = prefs.getString("api_key", "") ?: ""
-        set(value) = prefs.edit().putString("api_key", value.trim()).apply()
+    var geminiApiKey: String
+        get() = prefs.getString("gemini_api_key", "") ?: ""
+        set(value) = prefs.edit().putString("gemini_api_key", value.trim()).apply()
 
     var model: String
-        get() = prefs.getString("model", "gpt-5.6-sol") ?: "gpt-5.6-sol"
-        set(value) = prefs.edit().putString("model", value.trim()).apply()
+        get() = prefs.getString("gemini_model", "gemini-3.8-flash") ?: "gemini-3.8-flash"
+        set(value) = prefs.edit().putString("gemini_model", value.trim().ifBlank { "gemini-3.8-flash" }).apply()
 
     var assistantName: String
         get() = prefs.getString("assistant_name", "Astra") ?: "Astra"
