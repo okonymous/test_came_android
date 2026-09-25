@@ -26,8 +26,8 @@ class SecurePrefs(context: Context) {
         set(value) = prefs.edit().putString("gemini_api_key", value.trim()).apply()
 
     var model: String
-        get() = prefs.getString("gemini_model", "gemini-3.8-flash") ?: "gemini-3.8-flash"
-        set(value) = prefs.edit().putString("gemini_model", value.trim().ifBlank { "gemini-3.8-flash" }).apply()
+        get() = prefs.getString("gemini_model", "gemini-3.5-flash-lite") ?: "gemini-3.5-flash-lite"
+        set(value) = prefs.edit().putString("gemini_model", value.trim().ifBlank { "gemini-3.5-flash-lite" }).apply()
 
     var assistantName: String
         get() = prefs.getString("assistant_name", "Astra") ?: "Astra"
