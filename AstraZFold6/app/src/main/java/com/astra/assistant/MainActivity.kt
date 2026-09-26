@@ -64,6 +64,7 @@ import kotlinx.coroutines.launch
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import kotlin.math.roundToInt
 
 private val AstraBg = Color(0xFF050A12)
 private val AstraPanel = Color(0xE60A1320)
@@ -125,6 +126,7 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
     private fun AstraApp() {
         val prefs = remember { SecurePrefs(this) }
         val client = remember { GeminiClient() }
+        val weatherClient = remember { RealtimeWeather(this) }
         val scope = rememberCoroutineScope()
 
         var apiKey by remember { mutableStateOf(prefs.geminiApiKey) }
@@ -138,11 +140,67 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
         var memory by remember { mutableStateOf(prefs.loadMemory()) }
         var errorText by remember { mutableStateOf<String?>(null) }
         var now by remember { mutableStateOf(LocalDateTime.now()) }
+        var weather by remember { mutableStateOf<WeatherSnapshot?>(null) }
+        var weatherStatus by remember { mutableStateOf("Mengambil cuaca...") }
+
+        fun hasLocationPermission(): Boolean {
+            return ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            ) == PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.ACCESS_COARSE_LOCATION
+                ) == PackageManager.PERMISSION_GRANTED
+        }
+
+        fun refreshWeather() {
+            if (!hasLocationPermission()) {
+                weatherStatus = "Izinkan lokasi untuk cuaca real-time"
+                return
+            }
+            weatherStatus = "Memperbarui cuaca..."
+            scope.launch {
+                try {
+                    weather = weatherClient.load()
+                    weatherStatus = "LIVE WEATHER"
+                } catch (e: Exception) {
+                    weatherStatus = e.message ?: "Cuaca belum tersedia"
+                }
+            }
+        }
+
+        val locationPermissionLauncher = rememberLauncherForActivityResult(
+            ActivityResultContracts.RequestMultiplePermissions()
+        ) { result ->
+            val granted = result[Manifest.permission.ACCESS_FINE_LOCATION] == true ||
+                result[Manifest.permission.ACCESS_COARSE_LOCATION] == true
+            if (granted) refreshWeather()
+            else weatherStatus = "Izin lokasi belum diberikan"
+        }
 
         LaunchedEffect(Unit) {
             while (true) {
                 now = LocalDateTime.now()
                 delay(1000)
+            }
+        }
+
+        LaunchedEffect(Unit) {
+            if (hasLocationPermission()) {
+                refreshWeather()
+            } else {
+                locationPermissionLauncher.launch(
+                    arrayOf(
+                        Manifest.permission.ACCESS_FINE_LOCATION,
+                        Manifest.permission.ACCESS_COARSE_LOCATION
+                    )
+                )
+            }
+
+            while (true) {
+                delay(15 * 60 * 1000L)
+                if (hasLocationPermission()) refreshWeather()
             }
         }
 
@@ -295,9 +353,17 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 horizontalArrangement = Arrangement.spacedBy(14.dp)
                             ) {
                                 SideInfoCard(
-                                    title = "GEMINI CORE",
-                                    primary = "3.5",
-                                    secondary = "FLASH-LITE",
+                                    title = weather?.city ?: "CUACA REAL-TIME",
+                                    primary = weather?.temperatureC
+                                        ?.takeUnless { it.isNaN() }
+                                        ?.roundToInt()
+                                        ?.let { "$it°C" }
+                                        ?: "--°",
+                                    secondary = weather?.let {
+                                        it.description + "\nTerasa " +
+                                            it.feelsLikeC.roundToInt() + "°C • Angin " +
+                                            it.windKmh.roundToInt() + " km/j"
+                                    } ?: weatherStatus,
                                     icon = { Icon(Icons.Default.CloudQueue, null, tint = AstraCyan) },
                                     modifier = Modifier
                                         .weight(0.62f)
@@ -323,6 +389,34 @@ class MainActivity : ComponentActivity(), TextToSpeech.OnInitListener {
                                 )
                             }
                         } else {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(132.dp),
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                SideInfoCard(
+                                    title = weather?.city ?: "CUACA",
+                                    primary = weather?.temperatureC
+                                        ?.takeUnless { it.isNaN() }
+                                        ?.roundToInt()
+                                        ?.let { "$it°C" }
+                                        ?: "--°",
+                                    secondary = weather?.description ?: weatherStatus,
+                                    icon = { Icon(Icons.Default.CloudQueue, null, tint = AstraCyan) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                SideInfoCard(
+                                    title = now.format(
+                                        DateTimeFormatter.ofPattern("EEE, dd MMM", Locale("id", "ID"))
+                                    ),
+                                    primary = now.format(DateTimeFormatter.ofPattern("HH:mm")),
+                                    secondary = "Waktu perangkat",
+                                    icon = { Icon(Icons.Default.CalendarMonth, null, tint = AstraCyan) },
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+
                             OrbScene(
                                 state = state,
                                 name = assistantName,
