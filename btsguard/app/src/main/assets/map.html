@@ -1,27 +1,123 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no" />
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <style>
-html,body,#map{height:100%;margin:0;background:#0b1220}
-.leaflet-control-attribution{font-size:9px}
+html,body,#map{height:100%;margin:0;background:#08111f;font-family:Arial,sans-serif}
+.leaflet-container{background:#08111f}
+.leaflet-control-attribution{font-size:8px}
+.legend{background:rgba(8,17,31,.92);color:#e5e7eb;padding:7px 9px;border-radius:10px;font-size:10px;line-height:16px;box-shadow:0 4px 18px rgba(0,0,0,.25)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px}
 </style>
 </head>
 <body>
 <div id="map"></div>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-const map=L.map('map',{zoomControl:true}).setView([-6.2,106.8166],12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
-let current=null, estimate=null, dfTarget=null;
-const samples=L.layerGroup().addTo(map), bearings=L.layerGroup().addTo(map);
-function setCurrent(lat,lng){ if(current) map.removeLayer(current); current=L.circleMarker([lat,lng],{radius:7,color:'#1976d2',fillOpacity:.9}).addTo(map).bindPopup('Current position'); map.setView([lat,lng],15); }
-function addCellSample(lat,lng,dbm,label){ const c=dbm>-70?'#d32f2f':dbm>-90?'#f57c00':'#388e3c'; L.circleMarker([lat,lng],{radius:6,color:c,fillOpacity:.75}).addTo(samples).bindPopup(label+'<br>'+dbm+' dBm'); }
-function showEstimate(lat,lng,radius){ if(estimate) map.removeLayer(estimate); estimate=L.circle([lat,lng],{radius:radius,color:'#7b1fa2',fillOpacity:.14}).addTo(map).bindPopup('Estimated strongest-signal area'); }
-function addBearing(lat,lng,lat2,lng2,bearing){ L.polyline([[lat,lng],[lat2,lng2]],{color:'#e91e63',weight:3,dashArray:'7,7'}).addTo(bearings).bindPopup('Bearing '+bearing+'°'); }
-function showDfTarget(lat,lng){ if(dfTarget) map.removeLayer(dfTarget); dfTarget=L.marker([lat,lng]).addTo(map).bindPopup('Estimated DF intersection').openPopup(); map.panTo([lat,lng]); }
-function clearMap(){ samples.clearLayers(); bearings.clearLayers(); if(estimate){map.removeLayer(estimate);estimate=null;} if(dfTarget){map.removeLayer(dfTarget);dfTarget=null;} }
+const map=L.map('map',{zoomControl:true,attributionControl:true}).setView([-6.2,106.8166],12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+ maxZoom:19,
+ attribution:'© OpenStreetMap contributors'
+}).addTo(map);
+
+let current=null, estimate=null, dfTarget=null, servingDb=null;
+const samples=L.layerGroup().addTo(map);
+const bearings=L.layerGroup().addTo(map);
+const dbCells=L.layerGroup().addTo(map);
+const dbBounds=[];
+
+function colorForRadio(r){
+ const x=(r||'').toUpperCase();
+ if(x==='NR'||x.includes('5G')) return '#a855f7';
+ if(x==='LTE'||x.includes('4G')) return '#22c55e';
+ if(x==='UMTS'||x.includes('WCDMA')||x.includes('3G')) return '#38bdf8';
+ if(x==='GSM'||x.includes('2G')) return '#f59e0b';
+ return '#94a3b8';
+}
+
+function setCurrent(lat,lng){
+ if(current) map.removeLayer(current);
+ current=L.circleMarker([lat,lng],{
+   radius:9,color:'#ffffff',weight:3,fillColor:'#2563eb',fillOpacity:1
+ }).addTo(map).bindPopup('<b>Perangkat Anda</b>');
+ map.setView([lat,lng],15);
+}
+
+function clearDatabaseCells(){
+ dbCells.clearLayers();
+ dbBounds.length=0;
+ if(servingDb){map.removeLayer(servingDb);servingDb=null;}
+}
+
+function addDatabaseCell(lat,lng,radio,title,detail,range){
+ const color=colorForRadio(radio);
+ const marker=L.circleMarker([lat,lng],{
+   radius:8,color:'#0f172a',weight:2,fillColor:color,fillOpacity:.92
+ }).addTo(dbCells);
+ marker.bindPopup('<b>'+title+'</b><br>'+detail+'<br><small>OpenCellID / community estimate</small>');
+ if(range && range>0){
+   L.circle([lat,lng],{radius:Math.min(range,5000),color:color,weight:1,fillOpacity:.035,interactive:false}).addTo(dbCells);
+ }
+ dbBounds.push([lat,lng]);
+}
+
+function fitDatabaseCells(){
+ if(dbBounds.length===1){map.setView(dbBounds[0],16);return;}
+ if(dbBounds.length>1){map.fitBounds(dbBounds,{padding:[24,24],maxZoom:16});}
+}
+
+function showServingDatabasePosition(lat,lng,title,detail){
+ if(servingDb) map.removeLayer(servingDb);
+ servingDb=L.marker([lat,lng]).addTo(map)
+   .bindPopup('<b>'+title+'</b><br>'+detail+'<br><small>Matched via OpenCellID</small>')
+   .openPopup();
+ map.setView([lat,lng],17);
+}
+
+function addCellSample(lat,lng,dbm,label){
+ const c=dbm>-70?'#ef4444':dbm>-90?'#f59e0b':'#10b981';
+ L.circleMarker([lat,lng],{radius:6,color:'#0f172a',weight:2,fillColor:c,fillOpacity:.9})
+  .addTo(samples).bindPopup(label+'<br>'+dbm+' dBm');
+}
+
+function showEstimate(lat,lng,radius){
+ if(estimate) map.removeLayer(estimate);
+ estimate=L.circle([lat,lng],{radius:radius,color:'#06b6d4',weight:2,fillOpacity:.12})
+  .addTo(map).bindPopup('Perkiraan area signal-gradient');
+}
+
+function addBearing(lat,lng,lat2,lng2,bearing){
+ L.polyline([[lat,lng],[lat2,lng2]],{color:'#fb7185',weight:3,dashArray:'8,7'})
+  .addTo(bearings).bindPopup('Bearing '+bearing+'°');
+}
+
+function showDfTarget(lat,lng){
+ if(dfTarget) map.removeLayer(dfTarget);
+ dfTarget=L.circleMarker([lat,lng],{
+   radius:10,color:'#fff',weight:3,fillColor:'#e11d48',fillOpacity:1
+ }).addTo(map).bindPopup('<b>Estimasi DF Intersection</b>').openPopup();
+ map.panTo([lat,lng]);
+}
+
+function clearMeasurements(){
+ samples.clearLayers();
+ bearings.clearLayers();
+ if(estimate){map.removeLayer(estimate);estimate=null;}
+ if(dfTarget){map.removeLayer(dfTarget);dfTarget=null;}
+}
+
+const legend=L.control({position:'bottomleft'});
+legend.onAdd=function(){
+ const d=L.DomUtil.create('div','legend');
+ d.innerHTML='<b>Radio</b><br>'+
+ '<span class="dot" style="background:#a855f7"></span>5G NR&nbsp;&nbsp;'+
+ '<span class="dot" style="background:#22c55e"></span>LTE<br>'+
+ '<span class="dot" style="background:#38bdf8"></span>3G&nbsp;&nbsp;'+
+ '<span class="dot" style="background:#f59e0b"></span>2G';
+ return d;
+};
+legend.addTo(map);
 </script>
 </body>
 </html>
