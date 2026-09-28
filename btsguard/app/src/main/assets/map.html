@@ -50,12 +50,16 @@ function clearDatabaseCells(){
  if(servingDb){map.removeLayer(servingDb);servingDb=null;}
 }
 
-function addDatabaseCell(lat,lng,radio,title,detail,range){
- const color=colorForRadio(radio);
+function addDatabaseCell(lat,lng,radio,title,detail,range,mobile){
+ const color=mobile?colorForRadio(radio):'#64748b';
  const marker=L.circleMarker([lat,lng],{
-   radius:8,color:'#0f172a',weight:2,fillColor:color,fillOpacity:.92
+   radius:mobile?8:6,
+   color:mobile?'#0f172a':'#334155',
+   weight:2,
+   fillColor:color,
+   fillOpacity:mobile?.95:.72
  }).addTo(dbCells);
- marker.bindPopup('<b>'+title+'</b><br>'+detail+'<br><small>OpenCellID / community estimate</small>');
+ marker.bindPopup('<b>'+title+'</b><br>'+detail+'<br><small>OpenStreetMap / Overpass</small>');
  if(range && range>0){
    L.circle([lat,lng],{radius:Math.min(range,5000),color:color,weight:1,fillOpacity:.035,interactive:false}).addTo(dbCells);
  }
@@ -110,11 +114,9 @@ function clearMeasurements(){
 const legend=L.control({position:'bottomleft'});
 legend.onAdd=function(){
  const d=L.DomUtil.create('div','legend');
- d.innerHTML='<b>Radio</b><br>'+
- '<span class="dot" style="background:#a855f7"></span>5G NR&nbsp;&nbsp;'+
- '<span class="dot" style="background:#22c55e"></span>LTE<br>'+
- '<span class="dot" style="background:#38bdf8"></span>3G&nbsp;&nbsp;'+
- '<span class="dot" style="background:#f59e0b"></span>2G';
+ d.innerHTML='<b>Nearby sites</b><br>'+
+ '<span class="dot" style="background:#22c55e"></span>Mobile-tagged BTS<br>'+
+ '<span class="dot" style="background:#64748b"></span>Generic telecom site';
  return d;
 };
 legend.addTo(map);
