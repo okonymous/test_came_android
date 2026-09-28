@@ -4,13 +4,22 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.telephony.CellIdentityGsm;
 import android.telephony.CellIdentityLte;
 import android.telephony.CellIdentityNr;
@@ -53,8 +62,10 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements SensorEventListener {
     private static final int REQ_PERMS = 42;
     private static final int C_BG = Color.rgb(7,13,25);
     private static final int C_CARD = Color.rgb(15,23,42);
@@ -74,15 +85,26 @@ public class MainActivity extends Activity {
     private boolean mapReady = false;
     private final List<String> pendingJs = new ArrayList<>();
 
+    private LinearLayout rootView, headerView, tabsView, mapCardView;
     private FrameLayout contentHost;
-    private LinearLayout nearbyPanel, scannerPanel, dfPanel;
-    private Button tabNearby, tabScanner, tabDf;
+    private LinearLayout nearbyPanel, scannerPanel, dfPanel, cellDfPanel, cellsContainer;
+    private Button tabNearby, tabScanner, tabDf, scanActionButton;
 
     private TextView globalStatus, nearbyStatus, nearbyList;
     private EditText radiusInput;
     private TextView riskView, summaryView, cellsView;
+    private TextView count5g, count4g, count3g, count2g;
     private EditText bearingInput;
     private TextView dfStatus;
+
+    private TextView dfOperatorTitle, dfOperatorSub, dfIdValue, dfCellIdValue, dfTacValue, dfPciValue, dfChannelValue, dfLevelValue;
+    private CompassDfView compassDfView;
+    private CellRecord selectedCell;
+    private boolean dfDetailOpen = false;
+    private boolean scannerRunning = false;
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private SensorManager sensorManager;
+    private Sensor rotationSensor;
 
     private final List<SignalSample> signalSamples = new ArrayList<>();
     private final List<BearingSample> bearingSamples = new ArrayList<>();
@@ -96,18 +118,21 @@ public class MainActivity extends Activity {
         super.onCreate(savedInstanceState);
         telephony = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
         locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+        sensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        rotationSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         setContentView(buildUi());
         requestNeededPermissions();
         showTab("nearby");
     }
 
     private View buildUi() {
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(12),dp(12),dp(12),dp(10));
-        root.setBackgroundColor(C_BG);
+        rootView = new LinearLayout(this);
+        rootView.setOrientation(LinearLayout.VERTICAL);
+        rootView.setPadding(dp(12),dp(12),dp(12),dp(10));
+        rootView.setBackgroundColor(C_BG);
 
         LinearLayout header = new LinearLayout(this);
+        headerView = header;
         header.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout titles = new LinearLayout(this);
         titles.setOrientation(LinearLayout.VERTICAL);
@@ -119,9 +144,10 @@ public class MainActivity extends Activity {
         globalStatus.setBackground(round(C_CARD2,16,C_GREEN,1));
         header.addView(globalStatus);
         LinearLayout.LayoutParams hp=new LinearLayout.LayoutParams(-1,-2); hp.bottomMargin=dp(8);
-        root.addView(header,hp);
+        rootView.addView(header,hp);
 
         LinearLayout tabs=new LinearLayout(this);
+        tabsView = tabs;
         tabNearby=tabButton("NEARBY BTS");
         tabScanner=tabButton("SCANNER");
         tabDf=tabButton("DF");
@@ -132,9 +158,10 @@ public class MainActivity extends Activity {
         tabs.addView(tabScanner,new LinearLayout.LayoutParams(0,dp(42),1f));
         tabs.addView(tabDf,new LinearLayout.LayoutParams(0,dp(42),1f));
         LinearLayout.LayoutParams tp=new LinearLayout.LayoutParams(-1,-2); tp.bottomMargin=dp(8);
-        root.addView(tabs,tp);
+        rootView.addView(tabs,tp);
 
         LinearLayout mapCard=card();
+        mapCardView = mapCard;
         TextView mt=text("LIVE MAP",11,C_MUTED,true);
         mt.setPadding(dp(12),dp(9),dp(12),dp(6));
         mapCard.addView(mt);
@@ -153,18 +180,21 @@ public class MainActivity extends Activity {
         });
         map.loadUrl("file:///android_asset/map.html");
         mapCard.addView(map,new LinearLayout.LayoutParams(-1,dp(300)));
-        root.addView(mapCard);
+        rootView.addView(mapCard);
 
         contentHost=new FrameLayout(this);
         LinearLayout.LayoutParams chp=new LinearLayout.LayoutParams(-1,0,1f); chp.topMargin=dp(8);
-        root.addView(contentHost,chp);
+        rootView.addView(contentHost,chp);
         nearbyPanel=buildNearbyPanel();
         scannerPanel=buildScannerPanel();
         dfPanel=buildDfPanel();
+        cellDfPanel=buildCellDfPanel();
         contentHost.addView(nearbyPanel);
         contentHost.addView(scannerPanel);
         contentHost.addView(dfPanel);
-        return root;
+        contentHost.addView(cellDfPanel);
+        cellDfPanel.setVisibility(View.GONE);
+        return rootView;
     }
 
     private LinearLayout buildNearbyPanel(){
@@ -213,18 +243,58 @@ public class MainActivity extends Activity {
     }
 
     private LinearLayout buildScannerPanel(){
-        LinearLayout panel=new LinearLayout(this); panel.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout top=card(); top.setPadding(dp(12),dp(10),dp(12),dp(10));
-        LinearLayout r=new LinearLayout(this); r.setGravity(Gravity.CENTER_VERTICAL);
-        r.addView(text("Passive Cell Scanner",16,C_TEXT,true),new LinearLayout.LayoutParams(0,-2,1f));
-        Button scan=actionButton("SCAN NOW",C_BLUE); scan.setOnClickListener(v->scanCells());
-        r.addView(scan,new LinearLayout.LayoutParams(dp(120),dp(44))); top.addView(r);
-        riskView=text("Risk: belum ada data",17,C_MUTED,true); riskView.setPadding(0,dp(8),0,dp(3)); top.addView(riskView);
-        summaryView=text("Membaca serving/neighboring cell dari modem Android dan menilai pola anomali.",11,C_MUTED,false); top.addView(summaryView);
-        panel.addView(top);
+        LinearLayout panel=new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(Color.rgb(244,246,250));
+
+        LinearLayout scanHead=new LinearLayout(this);
+        scanHead.setOrientation(LinearLayout.VERTICAL);
+        scanHead.setPadding(dp(12),dp(10),dp(12),dp(10));
+        scanHead.setBackground(round(Color.rgb(8,17,31),14,Color.rgb(26,67,117),1));
+
+        LinearLayout titleRow=new LinearLayout(this);
+        titleRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView title=text("CELL SCANNER",16,Color.WHITE,true);
+        titleRow.addView(title,new LinearLayout.LayoutParams(0,-2,1f));
+        scanActionButton=actionButton("START",C_BLUE);
+        scanActionButton.setOnClickListener(v->toggleScanner());
+        titleRow.addView(scanActionButton,new LinearLayout.LayoutParams(dp(118),dp(44)));
+        scanHead.addView(titleRow);
+
+        LinearLayout metrics=new LinearLayout(this);
+        metrics.setGravity(Gravity.CENTER_VERTICAL);
+        count5g=metricBlock("0","5G");
+        count4g=metricBlock("0","4G");
+        count3g=metricBlock("0","3G");
+        count2g=metricBlock("0","2G");
+        metrics.addView(count5g,new LinearLayout.LayoutParams(0,dp(62),1f));
+        metrics.addView(count4g,new LinearLayout.LayoutParams(0,dp(62),1f));
+        metrics.addView(count3g,new LinearLayout.LayoutParams(0,dp(62),1f));
+        metrics.addView(count2g,new LinearLayout.LayoutParams(0,dp(62),1f));
+        LinearLayout.LayoutParams mp=new LinearLayout.LayoutParams(-1,-2); mp.topMargin=dp(8);
+        scanHead.addView(metrics,mp);
+        panel.addView(scanHead);
+
+        LinearLayout riskBar=new LinearLayout(this);
+        riskBar.setOrientation(LinearLayout.VERTICAL);
+        riskBar.setPadding(dp(12),dp(8),dp(12),dp(8));
+        riskBar.setBackgroundColor(Color.WHITE);
+        riskView=text("Risk: belum ada data",15,Color.rgb(71,85,105),true);
+        summaryView=text("Tekan START untuk memindai. Ketuk salah satu cell untuk membuka Direction Finder.",11,Color.rgb(100,116,139),false);
+        riskBar.addView(riskView);
+        riskBar.addView(summaryView);
+        panel.addView(riskBar);
+
         ScrollView sv=new ScrollView(this);
-        cellsView=text("Cell details akan tampil di sini.",12,C_TEXT,false); cellsView.setPadding(dp(4),dp(10),dp(4),dp(20));
-        sv.addView(cellsView); panel.addView(sv,new LinearLayout.LayoutParams(-1,0,1f));
+        sv.setBackgroundColor(Color.rgb(248,250,252));
+        cellsContainer=new LinearLayout(this);
+        cellsContainer.setOrientation(LinearLayout.VERTICAL);
+        cellsContainer.setPadding(dp(8),dp(6),dp(8),dp(18));
+        TextView empty=text("Belum ada hasil scan.",13,Color.rgb(100,116,139),false);
+        empty.setPadding(dp(8),dp(18),dp(8),dp(18));
+        cellsContainer.addView(empty);
+        sv.addView(cellsContainer);
+        panel.addView(sv,new LinearLayout.LayoutParams(-1,0,1f));
         return panel;
     }
 
@@ -249,9 +319,12 @@ public class MainActivity extends Activity {
     }
 
     private void showTab(String tab){
+        if(dfDetailOpen) return;
         nearbyPanel.setVisibility(tab.equals("nearby")?View.VISIBLE:View.GONE);
         scannerPanel.setVisibility(tab.equals("scanner")?View.VISIBLE:View.GONE);
         dfPanel.setVisibility(tab.equals("df")?View.VISIBLE:View.GONE);
+        cellDfPanel.setVisibility(View.GONE);
+        if(mapCardView!=null) mapCardView.setVisibility(tab.equals("nearby")?View.VISIBLE:View.GONE);
         styleTab(tabNearby,tab.equals("nearby"));
         styleTab(tabScanner,tab.equals("scanner"));
         styleTab(tabDf,tab.equals("df"));
@@ -414,15 +487,7 @@ public class MainActivity extends Activity {
         if(serving==null) serving=records.get(0);
         RiskResult risk=scoreRisk(serving,neighbors,simPlmn,loc);
         renderRisk(risk);
-        StringBuilder detail=new StringBuilder();
-        detail.append("SIM PLMN: ").append(simPlmn.isEmpty()?"unknown":simPlmn).append("\n");
-        detail.append("Cells visible: ").append(records.size()).append("\n\n");
-        for(CellRecord r:records){
-            detail.append(r.registered?"[SERVING] ":"[NEIGHBOR] ").append(r.rat).append("  ")
-                    .append(r.mcc).append("-").append(r.mnc).append("  ").append(r.dbm).append(" dBm\n")
-                    .append("  ").append(r.extra).append("\n\n");
-        }
-        cellsView.setText(detail.toString());
+        renderScannerRows(records);
         if(loc!=null){
             signalSamples.add(new SignalSample(loc.getLatitude(),loc.getLongitude(),serving.dbm));
             js(String.format(Locale.US,"addCellSample(%f,%f,%d,'%s')",loc.getLatitude(),loc.getLongitude(),serving.dbm,jsEscape(serving.rat+" "+serving.mcc+"-"+serving.mnc)));
@@ -436,20 +501,20 @@ public class MainActivity extends Activity {
             if(ci instanceof CellInfoNr){
                 CellInfoNr n=(CellInfoNr)ci; CellIdentityNr id=(CellIdentityNr)n.getCellIdentity(); CellSignalStrengthNr ss=(CellSignalStrengthNr)n.getCellSignalStrength();
                 String extra="NCI="+id.getNci()+" TAC="+id.getTac()+" PCI="+id.getPci()+" NRARFCN="+id.getNrarfcn()+" SS-RSRP="+ss.getSsRsrp()+" SS-RSRQ="+ss.getSsRsrq();
-                return new CellRecord("5G NR",safe(id.getMccString()),safe(id.getMncString()),id.getTac(),ss.getDbm(),ci.isRegistered(),extra);
+                return new CellRecord("5G NR",safe(id.getMccString()),safe(id.getMncString()),id.getTac(),String.valueOf(id.getNci()),String.valueOf(id.getPci()),String.valueOf(id.getNrarfcn()),ss.getDbm(),ci.isRegistered(),extra);
             }
             if(ci instanceof CellInfoLte){
                 CellInfoLte l=(CellInfoLte)ci; CellIdentityLte id=l.getCellIdentity(); CellSignalStrengthLte ss=l.getCellSignalStrength();
                 String extra="CI="+id.getCi()+" TAC="+id.getTac()+" PCI="+id.getPci()+" EARFCN="+id.getEarfcn()+" RSRP="+ss.getRsrp()+" RSRQ="+ss.getRsrq();
-                return new CellRecord("4G LTE",safe(id.getMccString()),safe(id.getMncString()),id.getTac(),ss.getDbm(),ci.isRegistered(),extra);
+                return new CellRecord("4G LTE",safe(id.getMccString()),safe(id.getMncString()),id.getTac(),String.valueOf(id.getCi()),String.valueOf(id.getPci()),String.valueOf(id.getEarfcn()),ss.getDbm(),ci.isRegistered(),extra);
             }
             if(ci instanceof CellInfoWcdma){
                 CellInfoWcdma w=(CellInfoWcdma)ci; CellIdentityWcdma id=w.getCellIdentity(); CellSignalStrengthWcdma ss=w.getCellSignalStrength();
-                return new CellRecord("3G WCDMA",safe(id.getMccString()),safe(id.getMncString()),id.getLac(),ss.getDbm(),ci.isRegistered(),"CID="+id.getCid()+" LAC="+id.getLac()+" PSC="+id.getPsc()+" UARFCN="+id.getUarfcn());
+                return new CellRecord("3G WCDMA",safe(id.getMccString()),safe(id.getMncString()),id.getLac(),String.valueOf(id.getCid()),String.valueOf(id.getPsc()),String.valueOf(id.getUarfcn()),ss.getDbm(),ci.isRegistered(),"CID="+id.getCid()+" LAC="+id.getLac()+" PSC="+id.getPsc()+" UARFCN="+id.getUarfcn());
             }
             if(ci instanceof CellInfoGsm){
                 CellInfoGsm g=(CellInfoGsm)ci; CellIdentityGsm id=g.getCellIdentity(); CellSignalStrengthGsm ss=g.getCellSignalStrength();
-                return new CellRecord("2G GSM",safe(id.getMccString()),safe(id.getMncString()),id.getLac(),ss.getDbm(),ci.isRegistered(),"CID="+id.getCid()+" LAC="+id.getLac()+" ARFCN="+id.getArfcn()+" BSIC="+id.getBsic());
+                return new CellRecord("2G GSM",safe(id.getMccString()),safe(id.getMncString()),id.getLac(),String.valueOf(id.getCid()),String.valueOf(id.getBsic()),String.valueOf(id.getArfcn()),ss.getDbm(),ci.isRegistered(),"CID="+id.getCid()+" LAC="+id.getLac()+" ARFCN="+id.getArfcn()+" BSIC="+id.getBsic());
             }
         }catch(Exception ignored){}
         return null;
@@ -476,6 +541,284 @@ public class MainActivity extends Activity {
         for(String x:r.reasons) sb.append("• ").append(x).append("\n");
         sb.append("\nSkor adalah indikator anomali, bukan bukti forensik BTS palsu.");
         summaryView.setText(sb.toString());
+    }
+
+    private TextView metricBlock(String value,String label){
+        TextView t=text(value+"\n"+label,13,Color.WHITE,true);
+        t.setGravity(Gravity.CENTER);
+        t.setLineSpacing(0,0.9f);
+        return t;
+    }
+
+    private void toggleScanner(){
+        if(scannerRunning) stopScanner();
+        else startScanner();
+    }
+
+    private final Runnable scannerRunnable=new Runnable(){
+        @Override public void run(){
+            if(!scannerRunning) return;
+            scanCells();
+            handler.postDelayed(this,5000);
+        }
+    };
+
+    private void startScanner(){
+        scannerRunning=true;
+        if(scanActionButton!=null){scanActionButton.setText("STOP");scanActionButton.setBackground(round(C_RED,12,C_RED,0));}
+        scanCells();
+        handler.removeCallbacks(scannerRunnable);
+        handler.postDelayed(scannerRunnable,5000);
+    }
+
+    private void stopScanner(){
+        scannerRunning=false;
+        handler.removeCallbacks(scannerRunnable);
+        if(scanActionButton!=null){scanActionButton.setText("START");scanActionButton.setBackground(round(C_BLUE,12,C_BLUE,0));}
+    }
+
+    private void updateCounters(List<CellRecord> records){
+        int n5=0,n4=0,n3=0,n2=0;
+        for(CellRecord r:records){
+            if(r.rat.contains("5G")) n5++;
+            else if(r.rat.contains("4G")) n4++;
+            else if(r.rat.contains("3G")) n3++;
+            else if(r.rat.contains("2G")) n2++;
+        }
+        if(count5g!=null)count5g.setText(n5+"\n5G");
+        if(count4g!=null)count4g.setText(n4+"\n4G");
+        if(count3g!=null)count3g.setText(n3+"\n3G");
+        if(count2g!=null)count2g.setText(n2+"\n2G");
+    }
+
+    private void renderScannerRows(List<CellRecord> records){
+        updateCounters(records);
+        if(cellsContainer==null) return;
+        cellsContainer.removeAllViews();
+        String now=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date());
+        for(CellRecord r:records){
+            LinearLayout row=new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(dp(10),dp(10),dp(8),dp(10));
+            row.setBackground(round(Color.WHITE,2,Color.rgb(226,232,240),1));
+
+            TextView badge=text(operatorBadge(r),15,C_BLUE,true);
+            badge.setGravity(Gravity.CENTER);
+            badge.setBackground(round(Color.rgb(239,246,255),8,Color.rgb(191,219,254),1));
+            row.addView(badge,new LinearLayout.LayoutParams(dp(58),dp(48)));
+
+            LinearLayout info=new LinearLayout(this);
+            info.setOrientation(LinearLayout.VERTICAL);
+            info.setPadding(dp(10),0,dp(6),0);
+            TextView name=text(operatorName(r),14,Color.rgb(51,65,85),false);
+            TextView sub=text(r.rat+"   "+r.dbm+" dBm   "+now,11,Color.rgb(100,116,139),false);
+            info.addView(name);
+            info.addView(sub);
+            row.addView(info,new LinearLayout.LayoutParams(0,-2,1f));
+
+            TextView find=text("⌕",28,C_BLUE,false);
+            find.setGravity(Gravity.CENTER);
+            row.addView(find,new LinearLayout.LayoutParams(dp(46),dp(46)));
+            TextView arrow=text("⌄",22,Color.rgb(100,116,139),false);
+            arrow.setGravity(Gravity.CENTER);
+            row.addView(arrow,new LinearLayout.LayoutParams(dp(40),dp(46)));
+
+            row.setOnClickListener(v->openCellDf(r));
+            LinearLayout.LayoutParams rp=new LinearLayout.LayoutParams(-1,-2); rp.bottomMargin=dp(1);
+            cellsContainer.addView(row,rp);
+        }
+    }
+
+    private String operatorBadge(CellRecord r){
+        String n=operatorName(r);
+        if(n.equals("Telkomsel")) return "TSEL";
+        if(n.startsWith("XL")) return "XL";
+        if(n.equals("Indosat")) return "IOH";
+        if(n.equals("Tri")) return "3";
+        if(n.equals("Smartfren")) return "SF";
+        return r.mcc+"\n"+r.mnc;
+    }
+
+    private String operatorName(CellRecord r){
+        String p=r.mcc+r.mnc;
+        if(p.equals("51010")) return "Telkomsel";
+        if(p.equals("51011")||p.equals("51008")) return "XL Axiata";
+        if(p.equals("51001")||p.equals("51021")) return "Indosat";
+        if(p.equals("51089")) return "Tri";
+        if(p.equals("51009")||p.equals("51028")) return "Smartfren";
+        return "PLMN "+r.mcc+"-"+r.mnc;
+    }
+
+    private LinearLayout buildCellDfPanel(){
+        LinearLayout panel=new LinearLayout(this);
+        panel.setOrientation(LinearLayout.VERTICAL);
+        panel.setBackgroundColor(Color.rgb(11,24,48));
+
+        LinearLayout header=new LinearLayout(this);
+        header.setOrientation(LinearLayout.VERTICAL);
+        header.setPadding(dp(16),dp(14),dp(16),dp(10));
+        header.setBackgroundColor(Color.rgb(248,250,252));
+        TextView cellSearch=text("Cell Search",26,Color.rgb(30,41,59),false);
+        header.addView(cellSearch);
+
+        LinearLayout selectedRow=new LinearLayout(this);
+        selectedRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout selectedInfo=new LinearLayout(this);
+        selectedInfo.setOrientation(LinearLayout.VERTICAL);
+        dfOperatorTitle=text("Operator",15,Color.rgb(71,85,105),false);
+        dfOperatorSub=text("Technology",11,Color.rgb(100,116,139),false);
+        selectedInfo.addView(dfOperatorTitle);
+        selectedInfo.addView(dfOperatorSub);
+        selectedRow.addView(selectedInfo,new LinearLayout.LayoutParams(0,-2,1f));
+        Button stop=actionButton("STOP",Color.rgb(239,35,47));
+        stop.setOnClickListener(v->closeCellDf());
+        selectedRow.addView(stop,new LinearLayout.LayoutParams(dp(124),dp(52)));
+        LinearLayout.LayoutParams srp=new LinearLayout.LayoutParams(-1,-2); srp.topMargin=dp(12);
+        header.addView(selectedRow,srp);
+
+        LinearLayout fields=new LinearLayout(this);
+        fields.setGravity(Gravity.CENTER);
+        dfIdValue=fieldColumn("ID","🇮🇩");
+        dfCellIdValue=fieldColumn("Cell Id","-");
+        dfTacValue=fieldColumn("TAC","-");
+        dfPciValue=fieldColumn("PCI","-");
+        dfChannelValue=fieldColumn("Channel","-");
+        dfLevelValue=fieldColumn("Level","-");
+        fields.addView(dfIdValue,new LinearLayout.LayoutParams(0,dp(64),0.7f));
+        fields.addView(dfCellIdValue,new LinearLayout.LayoutParams(0,dp(64),1.35f));
+        fields.addView(dfTacValue,new LinearLayout.LayoutParams(0,dp(64),0.9f));
+        fields.addView(dfPciValue,new LinearLayout.LayoutParams(0,dp(64),0.8f));
+        fields.addView(dfChannelValue,new LinearLayout.LayoutParams(0,dp(64),1.0f));
+        fields.addView(dfLevelValue,new LinearLayout.LayoutParams(0,dp(64),1.0f));
+        LinearLayout.LayoutParams fp=new LinearLayout.LayoutParams(-1,-2); fp.topMargin=dp(10);
+        header.addView(fields,fp);
+        panel.addView(header);
+
+        LinearLayout tools=new LinearLayout(this);
+        tools.setGravity(Gravity.CENTER_VERTICAL);
+        tools.setPadding(dp(14),dp(10),dp(14),dp(4));
+        String[] icons={"⏻","🔊","↔"};
+        for(String ic:icons){
+            TextView b=text(ic,20,C_CYAN,true);
+            b.setGravity(Gravity.CENTER);
+            b.setBackground(round(Color.rgb(35,58,96),6,Color.rgb(53,88,143),1));
+            LinearLayout.LayoutParams bp=new LinearLayout.LayoutParams(dp(50),dp(44)); bp.rightMargin=dp(8);
+            tools.addView(b,bp);
+        }
+        View spacer=new View(this);
+        tools.addView(spacer,new LinearLayout.LayoutParams(0,1,1f));
+        TextView gps=text("◉",22,Color.rgb(74,222,128),true);
+        gps.setGravity(Gravity.CENTER);
+        gps.setBackground(round(Color.rgb(35,58,96),6,Color.rgb(53,88,143),1));
+        tools.addView(gps,new LinearLayout.LayoutParams(dp(50),dp(44)));
+        panel.addView(tools);
+
+        compassDfView=new CompassDfView(this);
+        panel.addView(compassDfView,new LinearLayout.LayoutParams(-1,0,1f));
+        return panel;
+    }
+
+    private TextView fieldColumn(String label,String value){
+        TextView t=text(label+"\n"+value,10,Color.rgb(71,85,105),false);
+        t.setGravity(Gravity.CENTER);
+        t.setLineSpacing(0,1.05f);
+        return t;
+    }
+
+    private void openCellDf(CellRecord r){
+        stopScanner();
+        selectedCell=r;
+        dfDetailOpen=true;
+        if(headerView!=null)headerView.setVisibility(View.GONE);
+        if(tabsView!=null)tabsView.setVisibility(View.GONE);
+        if(mapCardView!=null)mapCardView.setVisibility(View.GONE);
+        nearbyPanel.setVisibility(View.GONE);
+        scannerPanel.setVisibility(View.GONE);
+        dfPanel.setVisibility(View.GONE);
+        cellDfPanel.setVisibility(View.VISIBLE);
+        updateCellDf(r);
+        if(rotationSensor!=null) sensorManager.registerListener(this,rotationSensor,SensorManager.SENSOR_DELAY_UI);
+        handler.removeCallbacks(dfRefreshRunnable);
+        handler.postDelayed(dfRefreshRunnable,1200);
+    }
+
+    private void closeCellDf(){
+        dfDetailOpen=false;
+        selectedCell=null;
+        handler.removeCallbacks(dfRefreshRunnable);
+        sensorManager.unregisterListener(this);
+        cellDfPanel.setVisibility(View.GONE);
+        if(headerView!=null)headerView.setVisibility(View.VISIBLE);
+        if(tabsView!=null)tabsView.setVisibility(View.VISIBLE);
+        showTab("scanner");
+    }
+
+    private void updateCellDf(CellRecord r){
+        if(r==null) return;
+        selectedCell=r;
+        String now=new SimpleDateFormat("HH:mm:ss",Locale.getDefault()).format(new Date());
+        dfOperatorTitle.setText(operatorName(r));
+        dfOperatorSub.setText(r.rat+"   Today at "+now);
+        dfIdValue.setText("ID\n🇮🇩");
+        dfCellIdValue.setText("Cell Id\n"+r.cellId);
+        dfTacValue.setText("TAC\n"+(r.tac==null?"-":r.tac));
+        dfPciValue.setText("PCI\n"+r.pci);
+        dfChannelValue.setText("Channel\n"+r.channel);
+        dfLevelValue.setText("Level\n"+r.dbm+" dBm");
+        if(compassDfView!=null)compassDfView.setDbm(r.dbm);
+    }
+
+    private final Runnable dfRefreshRunnable=new Runnable(){
+        @Override public void run(){
+            if(!dfDetailOpen||selectedCell==null) return;
+            refreshSelectedCell();
+            handler.postDelayed(this,3000);
+        }
+    };
+
+    private void refreshSelectedCell(){
+        if(checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)!=PackageManager.PERMISSION_GRANTED) return;
+        try{
+            telephony.requestCellInfoUpdate(getMainExecutor(),new TelephonyManager.CellInfoCallback(){
+                @Override public void onCellInfo(List<CellInfo> cellInfo){
+                    CellRecord match=findMatchingCell(cellInfo,selectedCell);
+                    if(match!=null) updateCellDf(match);
+                }
+            });
+        }catch(Exception e){
+            try{
+                CellRecord match=findMatchingCell(telephony.getAllCellInfo(),selectedCell);
+                if(match!=null) updateCellDf(match);
+            }catch(Exception ignored){}
+        }
+    }
+
+    private CellRecord findMatchingCell(List<CellInfo> infos,CellRecord target){
+        if(infos==null||target==null) return null;
+        for(CellInfo ci:infos){
+            CellRecord r=parseCell(ci);
+            if(r!=null&&r.key().equals(target.key())) return r;
+        }
+        return null;
+    }
+
+    @Override public void onSensorChanged(SensorEvent event){
+        if(event.sensor.getType()!=Sensor.TYPE_ROTATION_VECTOR||compassDfView==null) return;
+        float[] R=new float[9];
+        float[] orientation=new float[3];
+        SensorManager.getRotationMatrixFromVector(R,event.values);
+        SensorManager.getOrientation(R,orientation);
+        float heading=(float)Math.toDegrees(orientation[0]);
+        if(heading<0) heading+=360f;
+        compassDfView.setHeading(heading);
+    }
+
+    @Override public void onAccuracyChanged(Sensor sensor,int accuracy){}
+
+    @Override public void onBackPressed(){
+        if(dfDetailOpen){closeCellDf();return;}
+        super.onBackPressed();
     }
 
     private void addBearing(){
@@ -511,7 +854,8 @@ public class MainActivity extends Activity {
         signalSamples.clear(); bearingSamples.clear(); previousRat=null; previousTac=null; previousLocation=null; previousScanMs=0;
         if(riskView!=null){riskView.setText("Risk: belum ada data");riskView.setTextColor(C_MUTED);}
         if(summaryView!=null)summaryView.setText("Session scanner dibersihkan.");
-        if(cellsView!=null)cellsView.setText("Cell details akan tampil di sini.");
+        if(cellsContainer!=null){cellsContainer.removeAllViews(); TextView e=text("Belum ada hasil scan.",13,Color.rgb(100,116,139),false); e.setPadding(dp(8),dp(18),dp(8),dp(18)); cellsContainer.addView(e);}
+        updateCounters(Collections.emptyList());
         if(dfStatus!=null)dfStatus.setText("Belum ada bearing.");
         js("clearMeasurements()");
     }
@@ -601,12 +945,99 @@ public class MainActivity extends Activity {
     interface LocationCallback{void onLocation(Location location);}
 
     static class CellRecord{
-        final String rat,mcc,mnc,extra;final Integer tac;final int dbm;final boolean registered;
-        CellRecord(String rat,String mcc,String mnc,Integer tac,int dbm,boolean registered,String extra){this.rat=rat;this.mcc=mcc;this.mnc=mnc;this.tac=tac;this.dbm=dbm;this.registered=registered;this.extra=extra;}
+        final String rat,mcc,mnc,cellId,pci,channel,extra;
+        final Integer tac;
+        final int dbm;
+        final boolean registered;
+        CellRecord(String rat,String mcc,String mnc,Integer tac,String cellId,String pci,String channel,int dbm,boolean registered,String extra){
+            this.rat=rat;this.mcc=mcc;this.mnc=mnc;this.tac=tac;this.cellId=cellId;this.pci=pci;this.channel=channel;this.dbm=dbm;this.registered=registered;this.extra=extra;
+        }
+        String key(){return rat+"|"+mcc+"|"+mnc+"|"+cellId+"|"+tac+"|"+pci;}
     }
     static class RiskResult{final int score;final List<String> reasons;RiskResult(int s,List<String>r){score=s;reasons=r;}}
     static class SignalSample{final double lat,lng;final int dbm;SignalSample(double a,double b,int d){lat=a;lng=b;dbm=d;}}
     static class BearingSample{final double lat,lng,bearing;BearingSample(double a,double b,double c){lat=a;lng=b;bearing=c;}}
+    static class CompassDfView extends View{
+        private final Paint paint=new Paint(Paint.ANTI_ALIAS_FLAG);
+        private float heading=0f;
+        private int dbm=-120;
+
+        CompassDfView(Context c){super(c);setBackgroundColor(Color.rgb(11,24,48));}
+
+        void setHeading(float h){heading=h;invalidate();}
+        void setDbm(int value){dbm=value;invalidate();}
+
+        @Override protected void onDraw(Canvas canvas){
+            super.onDraw(canvas);
+            float w=getWidth(),h=getHeight();
+            float cx=w/2f,cy=h*0.43f;
+            float radius=Math.min(w*0.42f,h*0.34f);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(Math.max(3f,w/140f));
+            paint.setColor(Color.rgb(230,225,255));
+            canvas.drawCircle(cx,cy,radius,paint);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.WHITE);
+            paint.setTextSize(radius*0.12f);
+            paint.setTypeface(Typeface.DEFAULT_BOLD);
+            paint.setTextAlign(Paint.Align.CENTER);
+
+            float angle=(float)Math.toRadians(-heading);
+            drawCardinal(canvas,"N",cx,cy,radius*0.86f,angle,paint);
+            drawCardinal(canvas,"E",cx,cy,radius*0.86f,angle+(float)Math.PI/2,paint);
+            drawCardinal(canvas,"S",cx,cy,radius*0.86f,angle+(float)Math.PI,paint);
+            drawCardinal(canvas,"W",cx,cy,radius*0.86f,angle-(float)Math.PI/2,paint);
+
+            paint.setStrokeWidth(Math.max(3f,w/180f));
+            paint.setColor(Color.rgb(255,47,210));
+            canvas.drawLine(cx-radius,cy,cx+radius,cy,paint);
+
+            paint.setColor(Color.rgb(40,190,255));
+            canvas.drawLine(cx,cy,cx,cy-radius*0.94f,paint);
+
+            paint.setColor(Color.rgb(244,23,79));
+            android.graphics.Path tri=new android.graphics.Path();
+            tri.moveTo(cx,cy-radius*0.93f);
+            tri.lineTo(cx-dpStatic(getContext(),12),cy-radius*1.04f);
+            tri.lineTo(cx+dpStatic(getContext(),12),cy-radius*1.04f);
+            tri.close();
+            canvas.drawPath(tri,paint);
+
+            paint.setTextAlign(Paint.Align.LEFT);
+            paint.setTextSize(radius*0.15f);
+            paint.setColor(Color.WHITE);
+            canvas.drawText(dbm+"",dpStatic(getContext(),18),h-dpStatic(getContext(),56),paint);
+            paint.setTextSize(radius*0.075f);
+            canvas.drawText("dBm",dpStatic(getContext(),18)+paint.measureText(dbm+"")+dpStatic(getContext(),4),h-dpStatic(getContext(),56),paint);
+
+            int bars=Math.max(1,Math.min(12,(dbm+125)/6));
+            float bw=dpStatic(getContext(),7),gap=dpStatic(getContext(),3),base=h-dpStatic(getContext(),20);
+            for(int i=0;i<12;i++){
+                float bh=dpStatic(getContext(),8+i*2);
+                paint.setColor(i<bars?Color.rgb(24,96,255):Color.rgb(28,52,89));
+                canvas.drawRect(dpStatic(getContext(),18)+i*(bw+gap),base-bh,dpStatic(getContext(),18)+i*(bw+gap)+bw,base,paint);
+            }
+
+            paint.setTextAlign(Paint.Align.RIGHT);
+            paint.setTextSize(radius*0.075f);
+            paint.setColor(Color.rgb(148,163,184));
+            canvas.drawText(String.format(Locale.US,"Heading %.0f°",heading),w-dpStatic(getContext(),18),h-dpStatic(getContext(),22),paint);
+        }
+
+        private void drawCardinal(Canvas c,String s,float cx,float cy,float r,float a,Paint p){
+            float x=cx+(float)Math.sin(a)*r;
+            float y=cy-(float)Math.cos(a)*r;
+            c.save();
+            c.rotate((float)Math.toDegrees(a),x,y);
+            c.drawText(s,x,y-p.ascent()/3f,p);
+            c.restore();
+        }
+
+        private static int dpStatic(Context c,int v){return(int)(v*c.getResources().getDisplayMetrics().density+0.5f);}
+    }
+
     static class SiteRecord{
         final double lat,lon;final String name,operator,tech,structure,height;final boolean mobile;final float distanceM;
         SiteRecord(double lat,double lon,String name,String operator,String tech,String structure,String height,boolean mobile,float distanceM){this.lat=lat;this.lon=lon;this.name=name;this.operator=operator;this.tech=tech;this.structure=structure;this.height=height;this.mobile=mobile;this.distanceM=distanceM;}
